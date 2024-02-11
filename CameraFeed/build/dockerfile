@@ -1,0 +1,26 @@
+# Use the official Python image as the base image
+FROM python:3.11.1-slim-buster
+
+# Set environment variables
+ENV DEBIAN_FRONTEND="noninteractive"
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONIOENCODING=UTF-8
+
+# Set the working directory in the container
+WORKDIR /app
+
+# Copy the application files into the container
+# COPY main.py .
+# COPY requirements.txt .
+COPY ./build/main.py .
+COPY ./build/requirements.txt .
+
+# Install Python dependencies
+RUN python3 -m pip install -i http://pip-cache.pip-cache.svc.cluster.local/simple \
+    --trusted-host pip-cache.pip-cache.svc.cluster.local \
+    -r requirements.txt \
+    --extra-index-url https://pypi.org/simple \
+    --extra-index-url https://pkgs.dev.azure.com/quix-analytics/53f7fe95-59fe-4307-b479-2473b96de6d1/_packaging/public/pypi/simple/
+
+# Set the entry point for the container
+ENTRYPOINT ["python3", "main.py"]
