@@ -1,9 +1,59 @@
+"""
+This module defines functions and classes for processing JamCams data, making HTTP requests,
+and interacting with a Kafka server for publishing camera data. It includes functions for checking
+the online status of cameras, geofencing, making HTTP requests with retry mechanisms, and more.
+
+Dependencies:
+- requests
+- shapely
+- dateutil
+- kafka-python
+
+Environment Variables:
+- PYTHONIOENCODING (optional): The encoding for string-related operations (default is 'utf-8').
+- JAMCAMS_XML_FILE_PATH: Path to the local XML file with the API definition.
+
+Classes:
+- CameraDataProcessor: A class for processing camera data and managing counts of online and offline cameras.
+
+Functions:
+- camera_is_in_fence: Check if a given camera is within a specified geographic fence.
+- make_request_with_retry: Make a generic HTTP request to a URL with a retry mechanism.
+- pretty_format_xml: Format XML content to a pretty-printed, indented string.
+- parse_xml_file: Create and parse an XML file from a requests.Response object.
+- get_jamcams_data: Get JamCams data from the specified API URL with a retry mechanism.
+- camera_is_online: Check if a given camera is online based on the 'available' status.
+- headers_serializer: Serialize a list of header tuples into a list of tuples with UTF-8 encoded values.
+
+Example:
+    import os
+    from kafka import KafkaProducer
+
+    # Set up Kafka producer
+    producer = KafkaProducer(
+        bootstrap_servers='kafka-server:9092',
+        client_id='example-client',
+    )
+
+    # Initialize CameraDataProcessor
+    processor = CameraDataProcessor(num_online=0, num_offline=0)
+
+    # Use the CameraDataProcessor to process camera data and publish to Kafka
+    processor.publish_camera_data(
+        camera={'id': 'JamCams_123', 'additionalProperties': [{'key': 'available', 'value': 'true'}]},
+        cameras_data={'JamCams_123.mp4': '2022-02-12T12:00:00'},
+        producer=producer,
+        area_of_interest_polygon=None,
+        use_geo_fence=False,
+    )
+"""
+
 import json
 import os
 import time
 import xml.dom.minidom
 import xml.etree.ElementTree as ET
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 import requests
 import shapely
@@ -11,7 +61,9 @@ from dateutil import parser
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
 
-string_encoding = os.environ["string_encoding"]
+STRING_ENCODING = os.environ.get("PYTHONIOENCODING", "utf-8")
+# Path to local XML file with API definition
+JAMCAMS_XML_FILE_PATH = "jamcams.xml"
 
 
 def camera_is_in_fence(
@@ -97,35 +149,34 @@ def pretty_format_xml(xml_content, spaces=4) -> bytes:
     Parameters:
     - xml_content (str): The XML content to be formatted.
     - spaces (int): The number of spaces to use for indentation (default is 4).
-    - string_encoding (str): The encoding to use when converting the formatted XML to bytes (default is 'utf-8').
+    - STRING_ENCODING (str): The encoding to use when converting the formatted XML to bytes (default is 'utf-8').
 
     Returns:
     bytes: The formatted XML content as bytes.
     """
     dom = xml.dom.minidom.parseString(xml_content)
-    return dom.toprettyxml(indent=" " * spaces).encode(string_encoding)
+    return dom.toprettyxml(indent=" " * spaces).encode(STRING_ENCODING)
 
 
 def parse_xml_file(
-    resp: requests.Response, path: str, aws_xml_root_url: str
-) -> Dict[str, Any]:
+    resp: requests.Response, aws_xml_root_url: str
+) -> Dict[str | Any | None, str | Any | None]:
     """
     Create and parse an XML file from a requests.Response object.
 
     Parameters:
     - resp (requests.Response): The response object containing XML content.
-    - path (str): The path to save the XML file.
     - aws_xml_root_url (str): The root URL for AWS XML content.
 
     Returns:
     dict: A dictionary containing parsed information from the XML file.
     """
-    with open(path, "wb") as f:
+    with open(JAMCAMS_XML_FILE_PATH, "wb") as f:
         formatted_xml = pretty_format_xml(resp.content)
         f.write(formatted_xml)
 
     # Parse local XML file
-    tree = ET.parse(path)
+    tree = ET.parse(JAMCAMS_XML_FILE_PATH)
 
     root = tree.getroot()
 
@@ -214,72 +265,138 @@ def headers_serializer(headers):
     Returns:
     list: A new list of tuples with headers, where values are UTF-8 encoded.
     """
-    return [(key, str(value).encode(string_encoding)) for key, value in headers]
+    return [(key, str(value).encode(STRING_ENCODING)) for key, value in headers]
 
 
-def publish_camera_data(
-    camera: Dict[str, Any],
-    cameras_data: Dict[str, str],
-    producer: KafkaProducer,
-    area_of_interest_polygon: shapely.geometry.Polygon,
-    use_geo_fence: bool,
-) -> None:
+class CameraDataProcessor:
     """
-    Process camera data and publish to Kafka if conditions are met.
+    A class for processing camera data and managing counts of online and offline cameras.
 
-    Parameters:
-    - camera (Dict[str, Any]): Camera data dictionary.
-    - cameras_data (Dict[str, str]): Dictionary containing timestamp data for cameras.
-    - producer (KafkaProducer): Kafka producer instance.
-    - area_of_interest_polygon (shapely.geometry.Polygon): Bounding box area defining cameras to be processed.
-    - use_geo_fence (bool): Flag indicating whether geofencing is being used.
+    Attributes:
+    - num_online (int): Count of online cameras.
+    - num_offline (int): Count of offline cameras.
 
-    Returns:
-    None
+    Methods:
+    - __init__(self, num_online: int, num_offline: int) -> None:
+        Initialize a CameraDataProcessor instance.
+
+    - get_counts(self) -> Tuple[int, int]:
+        Get the current counts of online and offline cameras.
+
+    - reset(self) -> Tuple[int, int]:
+        Reset the counts of online and offline cameras to zero.
+
+    - publish_camera_data(
+        self,
+        camera: Dict[str, Any],
+        cameras_data: Dict[str, str],
+        producer: KafkaProducer,
+        area_of_interest_polygon: Optional[shapely.geometry.Polygon],
+        use_geo_fence: bool,
+    ) -> None:
+        Process camera data and publish to Kafka if conditions are met.
     """
-    camera_id = camera["id"]
 
-    if not camera_is_online(camera):
-        print(f"Camera {camera_id} is offline")
+    def __init__(self, num_online: int, num_offline: int) -> None:
+        """
+        Initialize a CameraDataProcessor instance.
 
-    else:
-        try:
-            timestamp_str = cameras_data[camera_id.replace("JamCams_", "") + ".mp4"]
-        except KeyError:
-            print(f"No data for {camera_id}")
-            return
+        Parameters:
+        - num_online (int): Initial count of online cameras.
+        - num_offline (int): Initial count of offline cameras.
+        """
+        self.num_online = num_online
+        self.num_offline = num_offline
 
-        timestamp = parser.parse(timestamp_str)
+    def get_counts(self) -> Tuple[int, int]:
+        """
+        Get the current counts of online and offline cameras.
 
-        if use_geo_fence and not camera_is_in_fence(
-            camera, area_of_interest_polygon, use_geo_fence
-        ):
-            # The camera is outside the fence, don't publish it to the producer topic.
-            use_camera = False
+        Returns:
+        Tuple[int, int]: A tuple containing the counts of online and offline cameras.
+        """
+        return self.num_online, self.num_offline
+
+    def reset(self) -> Tuple[int, int]:
+        """
+        Reset the counts of online and offline cameras to zero.
+
+        Returns:
+        Tuple[int, int]: A tuple containing the counts of online and offline cameras after the reset.
+        """
+        self.num_online, self.num_offline = 0, 0
+
+        return self.num_online, self.num_offline
+
+    def publish_camera_data(
+        self,
+        camera: Dict[str, Any],
+        cameras_data: Dict[str | Any | None, str | Any | None],
+        producer: KafkaProducer,
+        area_of_interest_polygon: Optional[shapely.geometry.Polygon],
+        use_geo_fence: bool,
+    ) -> None:
+        """
+        Process camera data and publish to Kafka if conditions are met.
+
+        Parameters:
+        - camera (Dict[str, Any]): Camera data dictionary.
+        - cameras_data (Dict[str | Any | None, str | Any | None]): Dictionary containing timestamp data for cameras.
+        - producer (KafkaProducer): Kafka producer instance.
+        - area_of_interest_polygon (shapely.geometry.Polygon): Bounding box area defining cameras to be processed.
+        - use_geo_fence (bool): Flag indicating whether geofencing is being used.
+
+        Returns:
+        None
+        """
+        camera_id = camera["id"]
+
+        if not camera_is_online(camera):
+            self.num_offline += 1
+            print(f"Camera {camera_id} is offline")
+
         else:
-            message = "inside the geofence" if use_geo_fence else "online"
-            print(f"Camera {camera_id} is {message}")
-
-            use_camera = True
-
-        if use_camera:
-            headers = [
-                (
-                    "timestamp",
-                    str(int(timestamp.timestamp()) * 1000),
-                ),  # Convert to milliseconds
-                ("camera_id", camera_id),
-            ]
+            self.num_online += 1
 
             try:
-                producer.send(
-                    os.environ["output"],
-                    value=json.dumps(camera),
-                    headers=headers_serializer(headers),
-                ).get(timeout=10)
+                timestamp_str = cameras_data[camera_id.replace("JamCams_", "") + ".mp4"]
 
-                print(f"sent: {camera_id}\n\n")
+            except KeyError:
+                print(f"No data for {camera_id}")
 
-            except KafkaError as ex:
-                print(f"Error publishing data to Kafka: {ex}")
-                print(f"Message metadata: {headers}")
+                return
+
+            timestamp = parser.parse(timestamp_str)
+
+            if use_geo_fence and not camera_is_in_fence(
+                camera, area_of_interest_polygon, use_geo_fence
+            ):
+                # The camera is outside the fence, don't publish it to the producer topic.
+                use_camera = False
+            else:
+                message = "inside the geofence" if use_geo_fence else "online"
+                print(f"\nCamera {camera_id} is {message}")
+
+                use_camera = True
+
+            if use_camera:
+                headers = [
+                    (
+                        "timestamp",
+                        str(int(timestamp.timestamp()) * 1000),
+                    ),  # Convert to milliseconds
+                    ("camera_id", camera_id),
+                ]
+
+                try:
+                    producer.send(
+                        os.environ["output"],
+                        value=json.dumps(camera),
+                        headers=headers_serializer(headers),
+                    ).get(timeout=10)
+
+                    print(f"sent: {camera_id}\n")
+
+                except KafkaError as ex:
+                    print(f"Error publishing data to Kafka: {ex}")
+                    print(f"Message metadata: {headers}")

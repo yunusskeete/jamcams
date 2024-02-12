@@ -10,33 +10,42 @@ variables:
     inputType: Secret
     description: 'Your TfL API key'
     defaultValue: 7bd4045d7ca14033ac6d7cb50fd0d8ae
+    required: true
   - name: jamcams_api_definition
     inputType: Url
     description: URL for the XML file detailing the JamCams API
     defaultValue: https://s3-eu-west-1.amazonaws.com/jamcams.tfl.gov.uk/
+    required: true
   - name: aws_xml_root
     inputType: Url
     description: AWS XML root element to parse
     defaultValue: http://s3.amazonaws.com/doc/2006-03-01/
+    required: true
   - name: jamcams_api
     inputType: Url
     description: URL for the JamCams API
     defaultValue: https://api.tfl.gov.uk/Place/Type/JamCam/
+    required: true
   - name: sleep_interval
     inputType: FreeText
     description: Governs the frequency at which calls to the TfL API are made
-    defaultValue: 60
+    defaultValue: '60'
     required: true
   - name: fence_coordinates
     inputType: FreeText
     description: 'Geofence coordinates. e.g. [(LAT1,LON1),(LAT2,LON2),(LAT3,LON3)]'
     defaultValue: ''
     required: false
-  - name: string_encoding
+  - name: kafka_host
     inputType: FreeText
-    description: String encoding
-    defaultValue: utf-8
-# dockerfile: dockerfile
+    description: 'Host of the kafka server'
+    defaultValue: 'kafka-server'
+    required: true
+  - name: kafka_port
+    inputType: FreeText
+    description: 'Port of the kafka server'
+    defaultValue: '9092'
+    required: true
 dockerfile: build/dockerfile
 runEntryPoint: main.py
 defaultFile: main.py
