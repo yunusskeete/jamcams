@@ -46,52 +46,26 @@ from shapely.geometry import Polygon
 from utils.utils import (
     STRING_ENCODING,
     CameraDataProcessor,
+    load_environment_variables,
     make_request_with_retry,
     parse_xml_file,
 )
 
-# Read environment variables from app.yaml
-app_yaml_path = os.environ.get("APP_YAML_PATH", "app.yaml")
-
-with open(app_yaml_path, "r", encoding=STRING_ENCODING) as file:
-    config = yaml.safe_load(file)
-    if "variables" in config and isinstance(config["variables"], list):
-        # Convert the list of variables to a dictionary
-        variables_dict = {
-            variable["name"]: variable["defaultValue"]
-            for variable in config["variables"]
-        }
-        os.environ.update(variables_dict)
-
-coords = os.environ["fence_coordinates"]
-jamcams_api_definition_url = os.environ["jamcams_api_definition"]
-aws_xml_root_url = os.environ["aws_xml_root"]
-jamcams_api_url = os.environ["jamcams_api"]
-api_key = os.environ["tfl_api_key"]
-kafka_host = os.environ["kafka_host"]
-kafka_port = os.environ["kafka_port"]
+load_environment_variables()
 
 
 # Setup camera coordinates and fence area
-if coords == "":
+if os.environ.get("fence_coordinates", "") == "":
     USE_GEO_FENCE = False
     area_of_interest_polygon = None
 else:
     USE_GEO_FENCE = True
-    area_of_interest = ast.literal_eval(coords)
+    area_of_interest = ast.literal_eval(os.environ.get("fence_coordinates", ""))
     print(f"Area of interest = {area_of_interest}")
     area_of_interest_polygon = Polygon(area_of_interest)
 
 
-# Define the Kafka producer
-producer = KafkaProducer(
-    bootstrap_servers=f"{kafka_host}:{kafka_port}",
-    client_id="kafka-python-producer-jamcams-camera-feed",
-    value_serializer=lambda v: str(v).encode(STRING_ENCODING),
-)
-
-
-def get_data() -> None:
+def get_data(stop_event: threading.Event) -> None:
     """
     Main function to retrieve data about online JamCams, process it,
     and publish relevant information to the Kafka stream topic.
@@ -99,48 +73,63 @@ def get_data() -> None:
     Returns:
         None
     """
+    # Define the Kafka producer
+    producer = KafkaProducer(
+        bootstrap_servers=f"{os.environ['kafka_host']}:{os.environ['kafka_port']}",
+        client_id="kafka-python-producer-jamcams-camera-feed",
+        value_serializer=lambda v: str(v).encode(STRING_ENCODING),
+    )
+
+    # Helper class
     processor = CameraDataProcessor(0, 0)
 
-    while not stop_event.is_set():
-        start = time.time()
-        print("Loading new data.")
+    try:
+        while not stop_event.is_set():
+            start = time.time()
+            print("Loading new data.")
 
-        # Make a request for JamCams API definition
-        print("Calling AWS API for JamCam API definition")
-        resp = make_request_with_retry(jamcams_api_definition_url)
-        if resp is None:
-            continue
+            # Make a request for JamCams API definition
+            print("Calling AWS API for JamCam API definition")
+            resp = make_request_with_retry(os.environ["jamcams_api_definition"])
+            if resp is None:
+                continue
 
-        # Parse JamCams API definition and extract data for cameras
-        cameras_data = parse_xml_file(resp, aws_xml_root_url)
+            # Parse JamCams API definition and extract data for cameras
+            cameras_data = parse_xml_file(resp, os.environ["aws_xml_root"])
 
-        print("Calling JamCam API for camera data")
-        cameras = make_request_with_retry(f"{jamcams_api_url}?&app_key={api_key}")
-        if cameras is None:
-            continue
-        cameras_list = cameras.json()
-
-        num_online, num_offline = processor.reset()
-        for camera in cameras_list:
-            processor.publish_camera_data(
-                camera,
-                cameras_data,
-                producer,
-                area_of_interest_polygon,
-                USE_GEO_FENCE,
+            print("Calling JamCam API for camera data")
+            cameras = make_request_with_retry(
+                f"{os.environ['jamcams_api']}?&app_key={os.environ['tfl_api_key']}"
             )
+            if cameras is None:
+                continue
 
-        num_online, num_offline = processor.get_counts()
-        print(f"{num_online} online cameras")
-        print(f"{num_offline} offline cameras")
+            cameras_list = cameras.json()
 
-        producer.flush()
+            num_online, num_offline = processor.reset()
+            for camera in cameras_list:
+                processor.publish_camera_data(
+                    camera,
+                    cameras_data,
+                    producer,
+                    area_of_interest_polygon,
+                    USE_GEO_FENCE,
+                )
 
-        sleep_time = int(os.environ["sleep_interval"]) - (time.time() - start)
+            num_online, num_offline = processor.get_counts()
+            print(f"{num_online} online cameras")
+            print(f"{num_offline} offline cameras")
 
-        if sleep_time > 0:
-            print("Sleep for " + str(sleep_time))
-            time.sleep(sleep_time)
+            producer.flush()
+
+            sleep_time = int(os.environ["sleep_interval"]) - (time.time() - start)
+
+            if sleep_time > 0:
+                print("Sleep for " + str(sleep_time))
+                time.sleep(sleep_time)
+
+    finally:
+        producer.close()
 
 
 # Create an event to signal the main thread to stop
@@ -150,9 +139,15 @@ stop_event = threading.Event()
 def main() -> None:
     """
     Creates a thread to run the main data retrieval function and handles termination signals.
+
+    Args:
+    - stop_event (threading.Event): An event to signal the termination of the processing thread.
+
+    Returns:
+    - None
     """
     try:
-        thread = Thread(target=get_data, args=(stop_event,))
+        thread = Thread(target=get_data, args=(stop_event))
         thread.start()
 
         # Wait for the worker thread to finish

@@ -1,9 +1,9 @@
-name: TFL Camera Feed
+name: JamCams Camera Feed
 language: python
 variables:
   - name: output
     inputType: OutputTopic
-    description: This is the output topic for TfL camera images
+    description: The output topic for JamCam camera images. Matches the input topic for the JamCams Frame Grabber.
     defaultValue: tfl-cameras
     required: true
   - name: tfl_api_key
@@ -38,14 +38,19 @@ variables:
     required: false
   - name: kafka_host
     inputType: FreeText
-    description: 'Host of the kafka server'
-    defaultValue: 'kafka-server'
+    description: Host of the kafka server
+    defaultValue: kafka-server
     required: true
   - name: kafka_port
     inputType: FreeText
-    description: 'Port of the kafka server'
+    description: Port of the kafka server
     defaultValue: '9092'
     required: true
+  - name: timeout_duration
+    inputType: FreeText
+    description: Duration after which TimeoutErrors are thrown
+    defaultValue: '2'
+    required: false
 dockerfile: build/dockerfile
 runEntryPoint: main.py
 defaultFile: main.py

@@ -1,0 +1,27 @@
+# Use the official Python image as the base image
+FROM python:3.11.1-slim-buster
+
+# Set environment variables
+ENV DEBIAN_FRONTEND="noninteractive"
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONIOENCODING=utf-8
+ENV APP_YAML_PATH /app/app.yaml
+
+# Set the working directory in the container
+WORKDIR /app
+
+# Copy the application files into the container
+COPY main.py .
+COPY utils ./utils
+COPY app.yaml .
+COPY requirements.txt .
+
+# Install system dependencies (for opencv-python)
+RUN apt-get update && apt-get install ffmpeg libsm6 libxext6  -y
+# RUN apt-get update && apt-get install libgl1-mesa-glx  -y
+
+# Install Python dependencies
+RUN python3 -m pip install -r requirements.txt
+
+# Set the entry point for the container
+ENTRYPOINT ["python3", "main.py"]
