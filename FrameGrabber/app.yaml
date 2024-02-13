@@ -1,0 +1,46 @@
+name: JamCams Frame Grabber
+language: python
+variables:
+  - name: input
+    inputType: InputTopic
+    description: The input topic for JamCams Frame Grabber. Matches the output toic for the JamCams Camera Feed.
+    defaultValue: tfl-cameras
+    required: true
+  - name: output
+    inputType: OutputTopic
+    description: The output topic for JamCams Frame Grabber. Matches the input topic for the Jamcams Object Detector.
+    defaultValue: image-raw
+    required: true
+  - name: frame_rate
+    inputType: FreeText
+    description: The rate at which frames are processed and published to the output topic. One in every `frame_rate` frames gets processed and published.
+    defaultValue: '10'
+    required: false
+  - name: redis_host
+    inputType: FreeText
+    description: Host of the redis server
+    defaultValue: redis-server
+    required: true
+  - name: redis_port
+    inputType: FreeText
+    description: Port of the redis server
+    defaultValue: '6379'
+    required: true
+  - name: kafka_host
+    inputType: FreeText
+    description: Host of the kafka server
+    defaultValue: kafka-server
+    required: true
+  - name: kafka_port
+    inputType: FreeText
+    description: Port of the kafka server
+    defaultValue: '9092'
+    required: true
+  - name: timeout_duration
+    inputType: FreeText
+    description: Duration after which TimeoutErrors are thrown
+    defaultValue: '2'
+    required: false
+dockerfile: build/dockerfile
+runEntryPoint: main.py
+defaultFile: main.py
